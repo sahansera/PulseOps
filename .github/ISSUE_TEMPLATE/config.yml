@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/sahansera/PulseOps/security
+    about: Please report suspected vulnerabilities privately.
+  - name: Building PulseOps series
+    url: https://sahansera.dev/series/building-pulseops/
+    about: Read the articles that explain the architectural decisions behind the project.

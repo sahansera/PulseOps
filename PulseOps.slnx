@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="PulseOps.AppHost/PulseOps.AppHost.csproj" />
+  <Project Path="PulseOps.ServiceDefaults/PulseOps.ServiceDefaults.csproj" />
+  <Project Path="src/PulseOps.Api/PulseOps.Api.csproj" />
+  <Project Path="src/PulseOps.Web/PulseOps.Web.csproj" />
+  <Project Path="tests/PulseOps.IntegrationTests/PulseOps.IntegrationTests.csproj" />
+</Solution>
