@@ -4,7 +4,7 @@ PulseOps evolves through small, explainable milestones. The roadmap is direction
 
 ## Current direction
 
-### M0 - Foundation
+### M0 - Foundation (complete)
 
 - .NET 10 solution
 - Aspire AppHost and ServiceDefaults
@@ -14,14 +14,14 @@ PulseOps evolves through small, explainable milestones. The roadmap is direction
 
 Snapshot: `pulseops-00-foundation`
 
-### M1 - Shared cache state
+### M1 - Shared cache state (current)
 
 - reproduce process-local cache divergence across API instances
 - add Redis through the Aspire application model
 - move service status caching to `IDistributedCache`
 - verify separate API instances observe the same cached state
 
-Snapshot target: `pulseops-01-redis`
+Snapshot target after review and merge: `pulseops-01-redis`
 
 ### M2 - Durable incident state
 

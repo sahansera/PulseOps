@@ -6,6 +6,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="13.4.6" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\PulseOps.ServiceDefaults\PulseOps.ServiceDefaults.csproj" />
   </ItemGroup>
 </Project>
