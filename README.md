@@ -26,20 +26,21 @@ The goal is not to build every feature at once. Each milestone should make the n
 
 ## Current architecture
 
-M0 is intentionally simple:
+M1 runs two API replicas against one shared Redis cache:
 
 ```text
 PulseOps.Web
      |
      | Aspire service discovery
      v
-PulseOps.Api
-     |
+PulseOps.Api x 2
+     |       \
+     |        +--> process-local service definitions
      v
-in-memory service registry
+Redis (shared short-lived service status)
 ```
 
-Aspire provides local orchestration, health checks, service discovery, telemetry wiring and the dashboard around those applications.
+Aspire provides local orchestration, health checks, service discovery, telemetry wiring and the dashboard around those resources. It also starts Redis and supplies its connection information to both API replicas; developers do not configure a localhost Redis connection string.
 
 See [docs/architecture.md](docs/architecture.md) and the [roadmap](docs/roadmap.md) for where the system is heading.
 
@@ -47,8 +48,9 @@ See [docs/architecture.md](docs/architecture.md) and the [roadmap](docs/roadmap.
 
 - .NET 10 SDK
 - Aspire CLI 13.4+
+- Docker or another Aspire-compatible container runtime
 
-A container runtime is not needed for M0. Later milestones introduce infrastructure such as Redis and PostgreSQL.
+Redis is part of the normal M1 runtime and is managed through the Aspire AppHost. No separate Redis setup is required.
 
 ## Run locally
 
@@ -68,12 +70,13 @@ The Aspire dashboard will expose the running resources and their endpoints.
 
 ## API
 
-M0 intentionally keeps persistence in memory.
+Service definitions remain process-local in M1. Only the observed service status is shared through Redis, with a 30-second absolute expiration.
 
 ```http
 GET  /services
 GET  /services/{id}
 POST /services
+PUT  /services/{id}/status
 ```
 
 Example:
@@ -88,13 +91,23 @@ curl -X POST http://localhost:<api-port>/services \
   }'
 ```
 
+Write a short-lived status:
+
+```bash
+curl -X PUT http://localhost:<api-port>/services/payments-api/status \
+  -H 'Content-Type: application/json' \
+  -d '{ "status": "Healthy" }'
+```
+
+The write can be handled by one API replica and read from the other because both use the same Redis-backed `IDistributedCache`. A missing or expired status is returned as `Unknown`.
+
 ## Tests
 
 ```bash
 dotnet test
 ```
 
-The integration tests start the Aspire AppHost and verify both the API and Web resources.
+The integration tests start the Aspire AppHost, verify the API and Web resources, and prove that two distinct API processes share service status through Redis.
 
 ## How the project is versioned
 

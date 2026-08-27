@@ -1,21 +1,48 @@
-using System.Collections.Concurrent;
+using System.Text.Json.Serialization;
 using PulseOps.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
+builder.AddRedisDistributedCache("cache");
 
 builder.Services.AddSingleton<ServiceRegistry>();
+builder.Services.AddSingleton<ServiceStatusCache>();
+builder.Services.AddSingleton<ApiInstance>();
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
 var app = builder.Build();
 
 var services = app.MapGroup("/services");
 
-services.MapGet("", (ServiceRegistry registry) => Results.Ok(registry.GetAll()));
+services.MapGet("", async (
+    ServiceRegistry registry,
+    ServiceStatusCache statusCache,
+    CancellationToken cancellationToken) =>
+{
+    var responses = await Task.WhenAll(registry.GetAll().Select(async service =>
+        service.ToResponse(await statusCache.GetAsync(service.Id, cancellationToken)
+            ?? ServiceStatus.Unknown)));
 
-services.MapGet("/{id}", (string id, ServiceRegistry registry) =>
-    registry.TryGet(id, out var service)
-        ? Results.Ok(service)
-        : Results.NotFound());
+    return Results.Ok(responses);
+});
+
+services.MapGet("/{id}", async Task<IResult> (
+    string id,
+    ServiceRegistry registry,
+    ServiceStatusCache statusCache,
+    CancellationToken cancellationToken) =>
+{
+    if (!registry.TryGet(id, out var service))
+    {
+        return Results.NotFound();
+    }
+
+    var status = await statusCache.GetAsync(service.Id, cancellationToken)
+        ?? ServiceStatus.Unknown;
+
+    return Results.Ok(service.ToResponse(status));
+});
 
 services.MapPost("", (RegisterServiceRequest request, ServiceRegistry registry) =>
 {
@@ -29,54 +56,53 @@ services.MapPost("", (RegisterServiceRequest request, ServiceRegistry registry) 
         });
     }
 
-    var service = new MonitoredService(
+    var service = new ServiceDefinition(
         request.Id.Trim(),
         request.Name.Trim(),
-        request.Url.Trim(),
-        ServiceStatus.Unknown);
+        request.Url.Trim());
 
     return registry.TryAdd(service)
-        ? Results.Created($"/services/{service.Id}", service)
+        ? Results.Created($"/services/{service.Id}", service.ToResponse(ServiceStatus.Unknown))
         : Results.Conflict(new { message = $"A service with id '{service.Id}' already exists." });
 });
+
+services.MapPut("/{id}/status", async Task<IResult> (
+    string id,
+    UpdateServiceStatusRequest request,
+    ServiceRegistry registry,
+    ServiceStatusCache statusCache,
+    CancellationToken cancellationToken) =>
+{
+    if (!registry.TryGet(id, out var service))
+    {
+        return Results.NotFound();
+    }
+
+    if (!Enum.TryParse<ServiceStatus>(request.Status, true, out var status) ||
+        status is ServiceStatus.Unknown)
+    {
+        return Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            ["status"] = ["Status must be Healthy or Unhealthy."]
+        });
+    }
+
+    await statusCache.SetAsync(service.Id, status, cancellationToken);
+
+    return Results.Ok(service.ToResponse(status));
+});
+
+app.MapGet("/diagnostics/instance", (ApiInstance instance) => Results.Ok(instance));
 
 app.MapDefaultEndpoints();
 app.Run();
 
 namespace PulseOps.Api
 {
-    public sealed record RegisterServiceRequest(string Id, string Name, string Url);
-
-    public sealed record MonitoredService(string Id, string Name, string Url, ServiceStatus Status);
-
-    public enum ServiceStatus
+    public sealed record ApiInstance(Guid InstanceId)
     {
-        Unknown,
-        Healthy,
-        Unhealthy
-    }
-
-    public sealed class ServiceRegistry
-    {
-        private readonly ConcurrentDictionary<string, MonitoredService> _services =
-            new(StringComparer.OrdinalIgnoreCase);
-
-        public ServiceRegistry()
+        public ApiInstance() : this(Guid.NewGuid())
         {
-            TryAdd(new MonitoredService(
-                "payments-api",
-                "Payments API",
-                "https://example.com/health",
-                ServiceStatus.Unknown));
         }
-
-        public IReadOnlyCollection<MonitoredService> GetAll() =>
-            _services.Values.OrderBy(service => service.Name).ToArray();
-
-        public bool TryGet(string id, out MonitoredService? service) =>
-            _services.TryGetValue(id, out service);
-
-        public bool TryAdd(MonitoredService service) =>
-            _services.TryAdd(service.Id, service);
     }
 }
