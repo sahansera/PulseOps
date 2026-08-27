@@ -14,14 +14,14 @@ PulseOps evolves through small, explainable milestones. The roadmap is direction
 
 Snapshot: `pulseops-00-foundation`
 
-### M1 - Shared cache state (current)
+### M1 - Shared cache state (complete)
 
 - reproduce process-local cache divergence across API instances
 - add Redis through the Aspire application model
 - move service status caching to `IDistributedCache`
 - verify separate API instances observe the same cached state
 
-Snapshot target after review and merge: `pulseops-01-redis`
+Snapshot: `pulseops-01-redis`
 
 ### M2 - Durable incident state
 
