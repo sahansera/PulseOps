@@ -159,10 +159,19 @@ public sealed class AppHostTests
             new { status = "Resolved" },
             cancellationToken);
 
-        Assert.True(
-            updateResponse.StatusCode is HttpStatusCode.OK,
-            $"Expected status update to return OK, but received {updateResponse.StatusCode}: " +
-            await updateResponse.Content.ReadAsStringAsync(cancellationToken));
+        if (updateResponse.StatusCode is not HttpStatusCode.OK)
+        {
+            var responseBody = await updateResponse.Content.ReadAsStringAsync(cancellationToken);
+            var resourceLogs = app.Services.GetRequiredService<ResourceLoggerService>();
+            var logs = await ReadAvailableLogsAsync(
+                resourceLogs,
+                replicaEndpoints[1].ResourceId,
+                cancellationToken);
+
+            Assert.Fail(
+                $"Expected status update to return OK, but received " +
+                $"{updateResponse.StatusCode}: {responseBody}{Environment.NewLine}{logs}");
+        }
 
         var resolved = await GetIncidentAsync(clientA, created.Id, cancellationToken);
 
@@ -286,6 +295,34 @@ public sealed class AppHostTests
 
         throw new InvalidOperationException(
             $"API replica '{replicaId}' did not report its listening endpoint.");
+    }
+
+    private static async Task<string> ReadAvailableLogsAsync(
+        ResourceLoggerService resourceLogs,
+        string resourceId,
+        CancellationToken cancellationToken)
+    {
+        using var logTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        logTimeout.CancelAfter(TimeSpan.FromSeconds(2));
+
+        var lines = new List<string>();
+
+        try
+        {
+            await foreach (var logBatch in resourceLogs
+                .GetAllAsync(resourceId)
+                .WithCancellation(logTimeout.Token))
+            {
+                lines.AddRange(logBatch.Select(line => line.Content));
+            }
+        }
+        catch (OperationCanceledException) when (
+            logTimeout.IsCancellationRequested &&
+            !cancellationToken.IsCancellationRequested)
+        {
+        }
+
+        return string.Join(Environment.NewLine, lines);
     }
 
     private static async Task<Uri> WaitForHealthyApiReplicaAsync(
