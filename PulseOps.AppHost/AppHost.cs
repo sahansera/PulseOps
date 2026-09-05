@@ -2,9 +2,15 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var cache = builder.AddRedis("cache");
 
-var postgres = builder
-    .AddPostgres("postgres")
-    .WithDataVolume();
+var postgres = builder.AddPostgres("postgres");
+
+if (!string.Equals(
+    builder.Configuration["PulseOps:UsePostgresDataVolume"],
+    "false",
+    StringComparison.OrdinalIgnoreCase))
+{
+    postgres.WithDataVolume();
+}
 
 var database = postgres.AddDatabase("pulseops");
 
