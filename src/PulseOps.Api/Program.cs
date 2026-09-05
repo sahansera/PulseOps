@@ -1,13 +1,16 @@
 using System.Text.Json.Serialization;
 using PulseOps.Api;
+using PulseOps.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 builder.AddRedisDistributedCache("cache");
+builder.AddNpgsqlDbContext<PulseOpsDbContext>("pulseops");
 
 builder.Services.AddSingleton<ServiceRegistry>();
 builder.Services.AddSingleton<ServiceStatusCache>();
 builder.Services.AddSingleton<ApiInstance>();
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
@@ -92,6 +95,7 @@ services.MapPut("/{id}/status", async Task<IResult> (
     return Results.Ok(service.ToResponse(status));
 });
 
+app.MapIncidentEndpoints();
 app.MapGet("/diagnostics/instance", (ApiInstance instance) => Results.Ok(instance));
 
 app.MapDefaultEndpoints();

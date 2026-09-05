@@ -114,6 +114,92 @@ public sealed class AppHostTests
         Assert.Equal("Healthy", service.RootElement.GetProperty("status").GetString());
     }
 
+    [Fact]
+    public async Task IncidentAndStatusHistoryAreSharedAcrossApiReplicas()
+    {
+        using var cts = new CancellationTokenSource(DefaultTimeout);
+        var cancellationToken = cts.Token;
+
+        var appHost = await DistributedApplicationTestingBuilder
+            .CreateAsync<Projects.PulseOps_AppHost>(cancellationToken);
+
+        await using var app = await appHost.BuildAsync(cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+
+        await app.StartAsync(cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+
+        var replicaEndpoints = await WaitForHealthyApiReplicasAsync(app, cancellationToken);
+
+        using var clientA = new HttpClient { BaseAddress = replicaEndpoints[0] };
+        using var clientB = new HttpClient { BaseAddress = replicaEndpoints[1] };
+
+        Assert.NotEqual(
+            await GetInstanceIdAsync(clientA, cancellationToken),
+            await GetInstanceIdAsync(clientB, cancellationToken));
+
+        var created = await CreateIncidentAsync(clientA, cancellationToken);
+        var loaded = await GetIncidentAsync(clientB, created.Id, cancellationToken);
+
+        Assert.Equal(created.Id, loaded.Id);
+        Assert.Equal("payments-api", loaded.ServiceId);
+        Assert.Equal("Open", loaded.Status);
+        Assert.Single(loaded.History);
+
+        using var updateResponse = await clientB.PutAsJsonAsync(
+            $"/incidents/{created.Id}/status",
+            new { status = "Resolved" },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
+
+        var resolved = await GetIncidentAsync(clientA, created.Id, cancellationToken);
+
+        Assert.Equal("Resolved", resolved.Status);
+        Assert.Equal(["Open", "Resolved"], resolved.History.Select(item => item.Status));
+    }
+
+    [Fact]
+    public async Task IncidentSurvivesApiProcessRestart()
+    {
+        using var cts = new CancellationTokenSource(DefaultTimeout);
+        var cancellationToken = cts.Token;
+
+        var appHost = await DistributedApplicationTestingBuilder
+            .CreateAsync<Projects.PulseOps_AppHost>(cancellationToken);
+
+        await using var app = await appHost.BuildAsync(cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+
+        await app.StartAsync(cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+
+        var replicaEndpoints = await WaitForHealthyApiReplicasAsync(app, cancellationToken);
+
+        using (var client = new HttpClient { BaseAddress = replicaEndpoints[0] })
+        {
+            var created = await CreateIncidentAsync(client, cancellationToken);
+
+            var restart = await app.ResourceCommands.ExecuteCommandAsync(
+                "api",
+                KnownResourceCommands.RestartCommand,
+                cancellationToken);
+
+            Assert.True(restart.Success, restart.Message);
+
+            var restartedEndpoints = await WaitForHealthyApiReplicasAsync(app, cancellationToken);
+            using var restartedClient = new HttpClient { BaseAddress = restartedEndpoints[0] };
+
+            var loaded = await GetIncidentAsync(
+                restartedClient,
+                created.Id,
+                cancellationToken);
+
+            Assert.Equal(created.Id, loaded.Id);
+            Assert.Equal("payments-api", loaded.ServiceId);
+        }
+    }
+
     private static async Task<IReadOnlyList<Uri>> WaitForHealthyApiReplicasAsync(
         DistributedApplication app,
         CancellationToken cancellationToken)
@@ -187,4 +273,49 @@ public sealed class AppHostTests
 
         return instance.RootElement.GetProperty("instanceId").GetGuid();
     }
+
+    private static async Task<IncidentResponse> CreateIncidentAsync(
+        HttpClient client,
+        CancellationToken cancellationToken)
+    {
+        using var response = await client.PostAsJsonAsync(
+            "/incidents",
+            new
+            {
+                serviceId = "payments-api",
+                summary = "Payments API unavailable"
+            },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        return await response.Content.ReadFromJsonAsync<IncidentResponse>(cancellationToken)
+            ?? throw new InvalidOperationException("The API returned an empty incident response.");
+    }
+
+    private static async Task<IncidentResponse> GetIncidentAsync(
+        HttpClient client,
+        Guid incidentId,
+        CancellationToken cancellationToken)
+    {
+        using var response = await client.GetAsync($"/incidents/{incidentId}", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        return await response.Content.ReadFromJsonAsync<IncidentResponse>(cancellationToken)
+            ?? throw new InvalidOperationException("The API returned an empty incident response.");
+    }
+
+    private sealed record IncidentResponse(
+        Guid Id,
+        string ServiceId,
+        string Summary,
+        string Status,
+        DateTimeOffset CreatedAtUtc,
+        DateTimeOffset UpdatedAtUtc,
+        IReadOnlyList<IncidentStatusHistoryResponse> History);
+
+    private sealed record IncidentStatusHistoryResponse(
+        Guid Id,
+        string Status,
+        DateTimeOffset ChangedAtUtc);
 }

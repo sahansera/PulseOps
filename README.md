@@ -26,7 +26,7 @@ The goal is not to build every feature at once. Each milestone should make the n
 
 ## Current architecture
 
-M1 runs two API replicas against one shared Redis cache:
+M2 runs two API replicas against shared Redis and PostgreSQL resources:
 
 ```text
 PulseOps.Web
@@ -35,12 +35,17 @@ PulseOps.Web
      v
 PulseOps.Api x 2
      |       \
-     |        +--> process-local service definitions
-     v
-Redis (shared short-lived service status)
+     |        +--> Redis (shared short-lived service status)
+     |
+     +-----------> PostgreSQL (durable incidents and status history)
+
+PulseOps.Migrations ---> PostgreSQL
 ```
 
-Aspire provides local orchestration, health checks, service discovery, telemetry wiring and the dashboard around those resources. It also starts Redis and supplies its connection information to both API replicas; developers do not configure a localhost Redis connection string.
+Aspire provides local orchestration, health checks, service discovery, telemetry wiring
+and the dashboard around those resources. It starts Redis and PostgreSQL, runs migrations
+once, and supplies connection information to both API replicas; developers do not
+configure localhost connection strings.
 
 See [docs/architecture.md](docs/architecture.md) and the [roadmap](docs/roadmap.md) for where the system is heading.
 
@@ -50,7 +55,8 @@ See [docs/architecture.md](docs/architecture.md) and the [roadmap](docs/roadmap.
 - Aspire CLI 13.4+
 - Docker or another Aspire-compatible container runtime
 
-Redis is part of the normal M1 runtime and is managed through the Aspire AppHost. No separate Redis setup is required.
+Redis and PostgreSQL are part of the normal M2 runtime and are managed through the Aspire
+AppHost. No separate database or cache setup is required.
 
 ## Run locally
 
@@ -70,7 +76,8 @@ The Aspire dashboard will expose the running resources and their endpoints.
 
 ## API
 
-Service definitions remain process-local in M1. Only the observed service status is shared through Redis, with a 30-second absolute expiration.
+Service definitions remain process-local. Observed service status is shared through Redis
+with a 30-second absolute expiration.
 
 ```http
 GET  /services
@@ -101,13 +108,35 @@ curl -X PUT http://localhost:<api-port>/services/payments-api/status \
 
 The write can be handled by one API replica and read from the other because both use the same Redis-backed `IDistributedCache`. A missing or expired status is returned as `Unknown`.
 
+Incidents and their status history are durable PostgreSQL state:
+
+```http
+POST /incidents
+GET  /incidents
+GET  /incidents/{id}
+PUT  /incidents/{id}/status
+```
+
+Create an incident:
+
+```bash
+curl -X POST http://localhost:<api-port>/incidents \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "serviceId": "payments-api",
+    "summary": "Payments API unavailable"
+  }'
+```
+
 ## Tests
 
 ```bash
 dotnet test
 ```
 
-The integration tests start the Aspire AppHost, verify the API and Web resources, and prove that two distinct API processes share service status through Redis.
+The integration tests start the Aspire AppHost and prove that two distinct API processes
+share Redis status and PostgreSQL incidents. They also verify incident history and
+durability across API process restarts.
 
 ## How the project is versioned
 
