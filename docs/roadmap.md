@@ -23,14 +23,14 @@ Snapshot: `pulseops-00-foundation`
 
 Snapshot: `pulseops-01-redis`
 
-### M2 - Durable incident state
+### M2 - Durable incident state (complete)
 
 - add PostgreSQL through Aspire
 - persist incidents and status history
-- define migration ownership
-- model startup, readiness and database failure behaviour
+- run migrations through one explicit owner before API startup
+- verify state across API replicas and process restarts
 
-Snapshot target: `pulseops-02-postgres`
+Snapshot: `pulseops-02-postgres`
 
 ### M3 - Observability
 

@@ -21,7 +21,9 @@ public sealed class AppHostTests
         var cancellationToken = cts.Token;
 
         var appHost = await DistributedApplicationTestingBuilder
-            .CreateAsync<Projects.PulseOps_AppHost>(cancellationToken);
+            .CreateAsync<Projects.PulseOps_AppHost>(
+                ["--PulseOps:UsePostgresDataVolume=false"],
+                cancellationToken);
 
         await using var app = await appHost.BuildAsync(cancellationToken)
             .WaitAsync(DefaultTimeout, cancellationToken);
@@ -45,7 +47,9 @@ public sealed class AppHostTests
         var cancellationToken = cts.Token;
 
         var appHost = await DistributedApplicationTestingBuilder
-            .CreateAsync<Projects.PulseOps_AppHost>(cancellationToken);
+            .CreateAsync<Projects.PulseOps_AppHost>(
+                ["--PulseOps:UsePostgresDataVolume=false"],
+                cancellationToken);
 
         await using var app = await appHost.BuildAsync(cancellationToken)
             .WaitAsync(DefaultTimeout, cancellationToken);
@@ -71,7 +75,9 @@ public sealed class AppHostTests
         var cancellationToken = cts.Token;
 
         var appHost = await DistributedApplicationTestingBuilder
-            .CreateAsync<Projects.PulseOps_AppHost>(cancellationToken);
+            .CreateAsync<Projects.PulseOps_AppHost>(
+                ["--PulseOps:UsePostgresDataVolume=false"],
+                cancellationToken);
 
         await using var app = await appHost.BuildAsync(cancellationToken)
             .WaitAsync(DefaultTimeout, cancellationToken);
@@ -85,10 +91,10 @@ public sealed class AppHostTests
         var replicaEndpoints = await WaitForHealthyApiReplicasAsync(app, cancellationToken);
 
         Assert.Equal(2, replicaEndpoints.Count);
-        Assert.NotEqual(replicaEndpoints[0], replicaEndpoints[1]);
+        Assert.NotEqual(replicaEndpoints[0].Endpoint, replicaEndpoints[1].Endpoint);
 
-        using var clientA = new HttpClient { BaseAddress = replicaEndpoints[0] };
-        using var clientB = new HttpClient { BaseAddress = replicaEndpoints[1] };
+        using var clientA = new HttpClient { BaseAddress = replicaEndpoints[0].Endpoint };
+        using var clientB = new HttpClient { BaseAddress = replicaEndpoints[1].Endpoint };
 
         var instanceA = await GetInstanceIdAsync(clientA, cancellationToken);
         var instanceB = await GetInstanceIdAsync(clientB, cancellationToken);
@@ -114,7 +120,121 @@ public sealed class AppHostTests
         Assert.Equal("Healthy", service.RootElement.GetProperty("status").GetString());
     }
 
-    private static async Task<IReadOnlyList<Uri>> WaitForHealthyApiReplicasAsync(
+    [Fact]
+    public async Task IncidentAndStatusHistoryAreSharedAcrossApiReplicas()
+    {
+        using var cts = new CancellationTokenSource(DefaultTimeout);
+        var cancellationToken = cts.Token;
+
+        var appHost = await DistributedApplicationTestingBuilder
+            .CreateAsync<Projects.PulseOps_AppHost>(
+                ["--PulseOps:UsePostgresDataVolume=false"],
+                cancellationToken);
+
+        await using var app = await appHost.BuildAsync(cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+
+        await app.StartAsync(cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+
+        var replicaEndpoints = await WaitForHealthyApiReplicasAsync(app, cancellationToken);
+
+        using var clientA = new HttpClient { BaseAddress = replicaEndpoints[0].Endpoint };
+        using var clientB = new HttpClient { BaseAddress = replicaEndpoints[1].Endpoint };
+
+        Assert.NotEqual(
+            await GetInstanceIdAsync(clientA, cancellationToken),
+            await GetInstanceIdAsync(clientB, cancellationToken));
+
+        var created = await CreateIncidentAsync(clientA, cancellationToken);
+        var loaded = await GetIncidentAsync(clientB, created.Id, cancellationToken);
+
+        Assert.Equal(created.Id, loaded.Id);
+        Assert.Equal("payments-api", loaded.ServiceId);
+        Assert.Equal("Open", loaded.Status);
+        Assert.Single(loaded.History);
+
+        using var updateResponse = await clientB.PutAsJsonAsync(
+            $"/incidents/{created.Id}/status",
+            new { status = "Resolved" },
+            cancellationToken);
+
+        if (updateResponse.StatusCode is not HttpStatusCode.OK)
+        {
+            var responseBody = await updateResponse.Content.ReadAsStringAsync(cancellationToken);
+            var resourceLogs = app.Services.GetRequiredService<ResourceLoggerService>();
+            var logs = await ReadAvailableLogsAsync(
+                resourceLogs,
+                replicaEndpoints[1].ResourceId,
+                cancellationToken);
+
+            Assert.Fail(
+                $"Expected status update to return OK, but received " +
+                $"{updateResponse.StatusCode}: {responseBody}{Environment.NewLine}{logs}");
+        }
+
+        var resolved = await GetIncidentAsync(clientA, created.Id, cancellationToken);
+
+        Assert.Equal("Resolved", resolved.Status);
+        Assert.Equal(["Open", "Resolved"], resolved.History.Select(item => item.Status));
+    }
+
+    [Fact]
+    public async Task IncidentSurvivesApiProcessRestart()
+    {
+        using var cts = new CancellationTokenSource(DefaultTimeout);
+        var cancellationToken = cts.Token;
+
+        var appHost = await DistributedApplicationTestingBuilder
+            .CreateAsync<Projects.PulseOps_AppHost>(
+                ["--PulseOps:UsePostgresDataVolume=false"],
+                cancellationToken);
+
+        await using var app = await appHost.BuildAsync(cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+
+        await app.StartAsync(cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+
+        var replicaEndpoints = await WaitForHealthyApiReplicasAsync(app, cancellationToken);
+
+        using (var client = new HttpClient { BaseAddress = replicaEndpoints[0].Endpoint })
+        {
+            var instanceBeforeRestart = await GetInstanceIdAsync(client, cancellationToken);
+            var created = await CreateIncidentAsync(client, cancellationToken);
+
+            var restart = await app.ResourceCommands.ExecuteCommandAsync(
+                replicaEndpoints[0].ResourceId,
+                KnownResourceCommands.RestartCommand,
+                cancellationToken);
+
+            Assert.True(restart.Success, restart.Message);
+
+            var restartedEndpoint = await WaitForHealthyApiReplicaAsync(
+                app,
+                replicaEndpoints[0].ResourceId,
+                cancellationToken);
+
+            using var restartedClient = new HttpClient
+            {
+                BaseAddress = restartedEndpoint
+            };
+
+            Assert.NotEqual(
+                instanceBeforeRestart,
+                await GetInstanceIdAsync(restartedClient, cancellationToken));
+
+            var loaded = await GetIncidentAsync(
+                restartedClient,
+                created.Id,
+                cancellationToken);
+
+            Assert.Equal(created.Id, loaded.Id);
+            Assert.Equal("payments-api", loaded.ServiceId);
+        }
+    }
+
+    private static async Task<IReadOnlyList<ApiReplica>> WaitForHealthyApiReplicasAsync(
         DistributedApplication app,
         CancellationToken cancellationToken)
     {
@@ -133,14 +253,16 @@ public sealed class AppHostTests
             if (healthyReplicaIds.Count == 2)
             {
                 var resourceLogs = app.Services.GetRequiredService<ResourceLoggerService>();
-                var endpoints = new List<Uri>(2);
+                var replicas = new List<ApiReplica>(2);
 
                 foreach (var replicaId in healthyReplicaIds)
                 {
-                    endpoints.Add(await GetListeningEndpointAsync(resourceLogs, replicaId));
+                    replicas.Add(new ApiReplica(
+                        replicaId,
+                        await GetListeningEndpointAsync(resourceLogs, replicaId)));
                 }
 
-                return endpoints;
+                return replicas;
             }
         }
 
@@ -175,6 +297,59 @@ public sealed class AppHostTests
             $"API replica '{replicaId}' did not report its listening endpoint.");
     }
 
+    private static async Task<string> ReadAvailableLogsAsync(
+        ResourceLoggerService resourceLogs,
+        string resourceId,
+        CancellationToken cancellationToken)
+    {
+        using var logTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        logTimeout.CancelAfter(TimeSpan.FromSeconds(2));
+
+        var lines = new List<string>();
+
+        try
+        {
+            await foreach (var logBatch in resourceLogs
+                .GetAllAsync(resourceId)
+                .WithCancellation(logTimeout.Token))
+            {
+                lines.AddRange(logBatch.Select(line => line.Content));
+            }
+        }
+        catch (OperationCanceledException) when (
+            logTimeout.IsCancellationRequested &&
+            !cancellationToken.IsCancellationRequested)
+        {
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static async Task<Uri> WaitForHealthyApiReplicaAsync(
+        DistributedApplication app,
+        string replicaId,
+        CancellationToken cancellationToken)
+    {
+        await foreach (var resourceEvent in app.ResourceNotifications.WatchAsync(cancellationToken))
+        {
+            if (string.Equals(resourceEvent.ResourceId, replicaId, StringComparison.Ordinal) &&
+                resourceEvent.Snapshot.HealthStatus is HealthStatus.Healthy)
+            {
+                var endpoint = resourceEvent.Snapshot.Urls.FirstOrDefault(url =>
+                    !url.IsInactive &&
+                    string.Equals(url.Name, "http", StringComparison.Ordinal));
+
+                if (endpoint is not null)
+                {
+                    return new Uri(endpoint.Url);
+                }
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"API replica '{replicaId}' did not become healthy after restart.");
+    }
+
     private static async Task<Guid> GetInstanceIdAsync(
         HttpClient client,
         CancellationToken cancellationToken)
@@ -187,4 +362,51 @@ public sealed class AppHostTests
 
         return instance.RootElement.GetProperty("instanceId").GetGuid();
     }
+
+    private static async Task<IncidentResponse> CreateIncidentAsync(
+        HttpClient client,
+        CancellationToken cancellationToken)
+    {
+        using var response = await client.PostAsJsonAsync(
+            "/incidents",
+            new
+            {
+                serviceId = "payments-api",
+                summary = "Payments API unavailable"
+            },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        return await response.Content.ReadFromJsonAsync<IncidentResponse>(cancellationToken)
+            ?? throw new InvalidOperationException("The API returned an empty incident response.");
+    }
+
+    private static async Task<IncidentResponse> GetIncidentAsync(
+        HttpClient client,
+        Guid incidentId,
+        CancellationToken cancellationToken)
+    {
+        using var response = await client.GetAsync($"/incidents/{incidentId}", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        return await response.Content.ReadFromJsonAsync<IncidentResponse>(cancellationToken)
+            ?? throw new InvalidOperationException("The API returned an empty incident response.");
+    }
+
+    private sealed record IncidentResponse(
+        Guid Id,
+        string ServiceId,
+        string Summary,
+        string Status,
+        DateTimeOffset CreatedAtUtc,
+        DateTimeOffset UpdatedAtUtc,
+        IReadOnlyList<IncidentStatusHistoryResponse> History);
+
+    private sealed record IncidentStatusHistoryResponse(
+        Guid Id,
+        string Status,
+        DateTimeOffset ChangedAtUtc);
+
+    private sealed record ApiReplica(string ResourceId, Uri Endpoint);
 }

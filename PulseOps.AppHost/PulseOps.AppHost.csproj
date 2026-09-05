@@ -7,11 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="13.4.6" />
     <PackageReference Include="Aspire.Hosting.Redis" Version="13.4.6" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\src\PulseOps.Api\PulseOps.Api.csproj" />
     <ProjectReference Include="..\src\PulseOps.Web\PulseOps.Web.csproj" />
+    <ProjectReference Include="..\src\PulseOps.Migrations\PulseOps.Migrations.csproj" />
   </ItemGroup>
 </Project>

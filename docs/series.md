@@ -23,14 +23,15 @@ main
 | Milestone | Topic | Start tag | End tag | Status |
 |---|---|---|---|---|
 | M0 | Foundation | - | `pulseops-00-foundation` | Previous |
-| M1 | From in-memory caching to Redis | `pulseops-00-foundation` | `pulseops-01-redis` | Current and published |
-| M2 | Durable incident state with PostgreSQL | `pulseops-01-redis` | `pulseops-02-postgres` | Planned |
+| M1 | From in-memory caching to Redis | `pulseops-00-foundation` | `pulseops-01-redis` | Previous |
+| M2 | Durable incident state with PostgreSQL | `pulseops-01-redis` | `pulseops-02-postgres` | Current and published |
 | M3 | Logs, traces and metrics | `pulseops-02-postgres` | `pulseops-03-observability` | Planned |
 | M4 | GitHub Copilot SDK incident agent | `pulseops-03-observability` | `pulseops-04-copilot-agent` | Planned |
 
 Later milestones may add event-driven alert processing, background workers, messaging, SignalR, Microsoft Agent Framework, MCP, agent tracing, evaluation and deployment.
 
-M1 is implemented in the current codebase and published as the immutable `pulseops-01-redis` snapshot. The earlier `pulseops-00-foundation` snapshot remains unchanged.
+M2 is implemented in the current codebase and published as the immutable
+`pulseops-02-postgres` snapshot. The earlier snapshots remain unchanged.
 
 ## Snapshot policy
 
