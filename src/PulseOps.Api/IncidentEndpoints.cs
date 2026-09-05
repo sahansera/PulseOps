@@ -130,13 +130,16 @@ public static class IncidentEndpoints
             var now = timeProvider.GetUtcNow();
             incident.Status = status;
             incident.UpdatedAtUtc = now;
-            incident.History.Add(new IncidentStatusHistory
+            var history = new IncidentStatusHistory
             {
                 Id = Guid.NewGuid(),
                 IncidentId = incident.Id,
                 Status = status,
                 ChangedAtUtc = now
-            });
+            };
+
+            incident.History.Add(history);
+            db.IncidentStatusHistory.Add(history);
 
             await db.SaveChangesAsync(cancellationToken);
         }
