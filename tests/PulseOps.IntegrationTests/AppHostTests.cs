@@ -159,7 +159,10 @@ public sealed class AppHostTests
             new { status = "Resolved" },
             cancellationToken);
 
-        Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
+        Assert.True(
+            updateResponse.StatusCode is HttpStatusCode.OK,
+            $"Expected status update to return OK, but received {updateResponse.StatusCode}: " +
+            await updateResponse.Content.ReadAsStringAsync(cancellationToken));
 
         var resolved = await GetIncidentAsync(clientA, created.Id, cancellationToken);
 
@@ -198,14 +201,14 @@ public sealed class AppHostTests
 
             Assert.True(restart.Success, restart.Message);
 
-            await WaitForHealthyApiReplicaAsync(
+            var restartedEndpoint = await WaitForHealthyApiReplicaAsync(
                 app,
                 replicaEndpoints[0].ResourceId,
                 cancellationToken);
 
             using var restartedClient = new HttpClient
             {
-                BaseAddress = replicaEndpoints[0].Endpoint
+                BaseAddress = restartedEndpoint
             };
 
             Assert.NotEqual(
@@ -285,7 +288,7 @@ public sealed class AppHostTests
             $"API replica '{replicaId}' did not report its listening endpoint.");
     }
 
-    private static async Task WaitForHealthyApiReplicaAsync(
+    private static async Task<Uri> WaitForHealthyApiReplicaAsync(
         DistributedApplication app,
         string replicaId,
         CancellationToken cancellationToken)
@@ -295,7 +298,14 @@ public sealed class AppHostTests
             if (string.Equals(resourceEvent.ResourceId, replicaId, StringComparison.Ordinal) &&
                 resourceEvent.Snapshot.HealthStatus is HealthStatus.Healthy)
             {
-                return;
+                var endpoint = resourceEvent.Snapshot.Urls.FirstOrDefault(url =>
+                    !url.IsInactive &&
+                    string.Equals(url.Name, "http", StringComparison.Ordinal));
+
+                if (endpoint is not null)
+                {
+                    return new Uri(endpoint.Url);
+                }
             }
         }
 

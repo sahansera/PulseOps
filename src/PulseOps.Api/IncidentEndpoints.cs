@@ -133,6 +133,7 @@ public static class IncidentEndpoints
             incident.History.Add(new IncidentStatusHistory
             {
                 Id = Guid.NewGuid(),
+                IncidentId = incident.Id,
                 Status = status,
                 ChangedAtUtc = now
             });
